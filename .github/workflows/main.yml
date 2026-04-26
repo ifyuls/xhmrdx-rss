@@ -1,0 +1,49 @@
+name: Generate Daily MRDX RSS
+
+on:
+  schedule:
+    # 每天北京时间早晨 8:15 运行 (UTC 00:15)
+    # 考虑到新华每日电讯更新时间，比人民日报稍晚几分钟更稳妥
+    - cron: '15 0 * * *'
+  workflow_dispatch: # 允许手动点击按钮运行
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      # 第一步：归档旧文件
+      - name: Archive Previous RSS
+        run: |
+          mkdir -p history
+          # 检查旧文件是否存在，存在则改名移入 history 文件夹
+          if [ -f "rss_mrdx.xml" ]; then
+            # 使用文件最后的修改日期作为存档文件名
+            LAST_MOD_DATE=$(date -r rss_mrdx.xml +'%Y-%m-%d')
+            mv rss_mrdx.xml "history/mrdx_${LAST_MOD_DATE}.xml"
+            echo "Archived previous XML to history/mrdx_${LAST_MOD_DATE}.xml"
+          fi
+
+      # 第二步：运行新华每日电讯爬虫生成新的 rss_mrdx.xml
+      # 请确保你的 Python 脚本文件名确实是 mrdx.py
+      - name: Run scraper
+        run: python xhmrdx-scraper.py
+
+      # 第三步：自动提交新生成的 RSS 和归档文件
+      - name: Commit and push changes
+        uses: stefanzweifel/git-auto-commit-action@v4
+        with:
+          commit_message: "Update Daily MRDX RSS and Archive previous one"
+          # 提交所有更改，包括根目录的 rss_mrdx.xml 和 history 文件夹
+          file_pattern: '.'
