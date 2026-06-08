@@ -29,13 +29,19 @@ async def fetch(url, session, referer=None):
             if response.status == 200:
                 raw_data = await response.read()
                 return raw_data.decode('utf-8', errors='ignore')
-            return ""
-    except:
+            else:
+                print(f"❌ 网页请求失败 [状态码 {response.status}]: {url}")
+                return ""
+    except Exception as e:
+        print(f"❌ 网络请求异常 [{type(e).__name__}]: {url}")
         return ""
 
 async def get_article_detail(page_name, title_from_nav, article_url, page_url, session):
     html = await fetch(article_url, session, referer=page_url)
-    if not html: return None
+    if not html:
+        print(f"⚠️ 跳过解析（获取HTML为空）: {article_url}")
+        return None
+        
     soup = BeautifulSoup(html, 'html.parser')
     
     # 提取详情页标题逻辑
@@ -55,25 +61,36 @@ async def get_article_detail(page_name, title_from_nav, article_url, page_url, s
         base_dir = article_url.rsplit('/', 1)[0] + '/'
         for img in content_area.find_all('img'):
             if img.get('src'): img['src'] = urljoin(base_dir, img['src'])
+            
+        # 成功日志
+        print(f"✅ 成功抓取: {final_title}")
         return {'title': final_title, 'url': article_url, 'content_html': str(content_area)}
+    
+    # 失败日志：找到了网页，但找不到正文标签
+    print(f"❌ 无法解析正文（未找到 contenttext/ozoom 标签）: {article_url} | 标题: {final_title}")
     return None
 
 async def main():
     async with aiohttp.ClientSession() as session:
         print(f"🚀 自动化抓取启动 | 目标日期: {DATE}")
+        print(f"🔗 正在请求首页: {BASE_INDEX}")
         index_html = await fetch(BASE_INDEX, session)
         
         if not index_html:
-            print(f"⚠️ 无法获取 {DATE} 的报纸，可能尚未更新。")
+            print(f"🛑 错误: 无法获取 {DATE} 的报纸首页，可能尚未更新或网络阻断。")
             return
 
         soup = BeautifulSoup(index_html, 'html.parser')
         nav_div = soup.find('div', class_='listdaohang')
-        if not nav_div: return
+        if not nav_div: 
+            print("🛑 错误: 首页解析失败，未找到 'listdaohang' 标签，网站结构可能已发生变化！")
+            return
 
         # 1. 解析版面结构
         tasks = []
         h4_tags = nav_div.find_all('h4')
+        print(f"📊 首页解析成功，发现 {len(h4_tags)} 个版面。开始提取文章链接...")
+        
         for h4 in h4_tags:
             page_name = h4.get_text(strip=True)
             ul_tag = h4.find_next_sibling('ul')
@@ -84,13 +101,17 @@ async def main():
                     nav_title = link.get_text(strip=True)
                     tasks.append(get_article_detail(page_name, nav_title, url, BASE_INDEX, session))
 
+        total_parsed_links = len(tasks)
+        print(f"📦 发现总文章链接数: {total_parsed_links} 条。开始并发下载...")
+
         # 2. 修正网页源码的倒序排列
         tasks.reverse() 
 
         # 3. 异步并发抓取
-        print(f"📦 正在下载 {len(tasks)} 篇文章...")
         results = await asyncio.gather(*tasks)
         articles = [r for r in results if r]
+        
+        print(f"完成并发下载。发现链接 {total_parsed_links} 条，成功解析正文 {len(articles)} 篇。")
 
         # 4. 生成 RSS 文件
         fg = FeedGenerator()
@@ -99,18 +120,24 @@ async def main():
         fg.description('全量自动化顺序版')
         fg.language('zh-CN')
 
+        rss_count = 0
         for art in articles:
             fe = fg.add_entry()
             fe.title(art['title'])
             fe.link(href=art['url'])
-            fe.id(art['url'])
+            
+            # 【重要修改】使用 URL 结合 标题 作为唯一ID，防止相同URL覆盖
+            unique_id = f"{art['url']}#{art['title']}"
+            fe.id(unique_id)
+            
             fe.content(art['content_html'], type='html')
+            rss_count += 1
 
+        print(f"📝 正在写入 RSS 文件，共 {rss_count} 条 Item...")
         fg.rss_file('rss_mrdx.xml', pretty=True)
         print(f"✨ 成功！文件已保存至: rss_mrdx.xml")
 
 if __name__ == '__main__':
-    # 适配 Windows 本地运行
     if os.name == 'nt': 
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
     asyncio.run(main())
