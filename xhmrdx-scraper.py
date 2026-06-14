@@ -20,8 +20,6 @@ DEFAULT_HEADERS = {
     'Host': 'mrdx.cn',
 }
 
-CONNECTOR = aiohttp.TCPConnector(limit_per_host=5, limit=10)
-
 async def fetch(url, session, referer=None):
     headers = DEFAULT_HEADERS.copy()
     if referer:
@@ -104,7 +102,9 @@ async def get_article_detail(page_name, title_from_nav, article_url, page_url, s
         }
 
 async def main():
-    async with aiohttp.ClientSession(connector=CONNECTOR) as session:
+    # 在异步函数内部创建连接器（此时已有运行中的事件循环）
+    connector = aiohttp.TCPConnector(limit_per_host=5, limit=10)
+    async with aiohttp.ClientSession(connector=connector) as session:
         print(f"🚀 自动化抓取启动 | 目标日期: {DATE}")
         print(f"🔗 正在请求首页: {BASE_INDEX}")
         index_html = await fetch(BASE_INDEX, session)
@@ -149,7 +149,6 @@ async def main():
                 return result
 
         results = await asyncio.gather(*[limited_task(task) for task in tasks])
-        # results 顺序与 tasks 完全一致，每个元素都是一个字典（含 success 字段）
 
         success_count = sum(1 for r in results if r['success'])
         fail_count = total_links - success_count
