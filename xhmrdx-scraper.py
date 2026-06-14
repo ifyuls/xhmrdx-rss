@@ -1,6 +1,7 @@
 import aiohttp
 import asyncio
 import os
+import re
 import pytz
 from datetime import datetime
 from bs4 import BeautifulSoup
@@ -119,11 +120,21 @@ async def main():
             print("🛑 错误: 首页解析失败，未找到 'listdaohang' 标签。")
             return
 
-        # 按原始顺序收集任务
-        tasks = []
+        # 获取所有版面 h4 标签
         h4_tags = nav_div.find_all('h4')
         print(f"📊 首页解析成功，发现 {len(h4_tags)} 个版面。")
 
+        # ---- 关键修改：按版面号升序排序（01版在前，04版在后） ----
+        def get_page_order(h4):
+            text = h4.get_text(strip=True)
+            match = re.match(r'(\d+)', text)
+            if match:
+                return int(match.group(1))
+            return 999
+        h4_tags = sorted(h4_tags, key=get_page_order)
+
+        # 按原始顺序收集任务（此时已按版面升序）
+        tasks = []
         for h4 in h4_tags:
             page_name = h4.get_text(strip=True)
             ul_tag = h4.find_next_sibling('ul')
@@ -156,7 +167,7 @@ async def main():
         if fail_count > 0:
             print("失败链接已在上方日志中标记（❌ 或 ⚠️）。")
 
-        # 生成 RSS（包含所有条目，顺序不变）
+        # 生成 RSS（包含所有条目，顺序按版面升序）
         fg = FeedGenerator()
         fg.title(f'新华每日电讯 - {DATE}')
         fg.link(href=BASE_INDEX, rel='alternate')
@@ -171,7 +182,7 @@ async def main():
             fe.content(art['content_html'], type='html')
 
         fg.rss_file('rss_mrdx.xml', pretty=True)
-        print(f"✨ RSS 文件已生成: rss_mrdx.xml （共 {len(results)} 条，按原始顺序排列）")
+        print(f"✨ RSS 文件已生成: rss_mrdx.xml （共 {len(results)} 条，按版面01→04顺序排列）")
 
 if __name__ == '__main__':
     if os.name == 'nt':
