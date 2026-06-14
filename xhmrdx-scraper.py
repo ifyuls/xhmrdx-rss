@@ -1,7 +1,6 @@
 import aiohttp
 import asyncio
 import os
-import re
 import pytz
 from datetime import datetime
 from bs4 import BeautifulSoup
@@ -39,8 +38,7 @@ async def fetch(url, session, referer=None):
 
 async def get_article_detail(page_name, title_from_nav, article_url, page_url, session):
     """
-    抓取文章详情，无论成功或失败都返回一个字典，保证 RSS 中每篇文章都有条目。
-    返回格式：{'title': str, 'url': str, 'content_html': str, 'success': bool}
+    抓取文章详情，无论成功或失败都返回一个字典。
     """
     max_retries = 3
     html = ""
@@ -49,11 +47,10 @@ async def get_article_detail(page_name, title_from_nav, article_url, page_url, s
         if html:
             break
         if attempt < max_retries - 1:
-            wait_time = 2 ** attempt  # 1, 2, 4 秒
+            wait_time = 2 ** attempt
             print(f"⏳ {article_url} 第 {attempt+1} 次重试，等待 {wait_time} 秒...")
             await asyncio.sleep(wait_time)
 
-    # 最终失败的情况：无法获取 HTML
     if not html:
         print(f"⚠️ 最终失败（网络/重试）: {article_url}")
         return {
@@ -65,7 +62,6 @@ async def get_article_detail(page_name, title_from_nav, article_url, page_url, s
 
     soup = BeautifulSoup(html, 'html.parser')
 
-    # 提取标题（优先使用页面内的 h2，否则使用导航标题）
     main_title = soup.find('h2')
     sub_title = soup.find('h4')
     display_title = main_title.get_text(strip=True) if main_title else title_from_nav
@@ -75,7 +71,6 @@ async def get_article_detail(page_name, title_from_nav, article_url, page_url, s
 
     final_title = f"[{page_name}] {display_title}"
 
-    # 提取正文
     content_area = soup.find(id="contenttext") or soup.find(id="ozoom")
     if content_area:
         for tag in content_area.find_all(['style', 'script']):
@@ -93,8 +88,7 @@ async def get_article_detail(page_name, title_from_nav, article_url, page_url, s
             'success': True
         }
     else:
-        # 拿到了 HTML，但找不到正文容器
-        print(f"❌ 无法解析正文（未找到 contenttext/ozoom）: {article_url} | 标题: {final_title}")
+        print(f"❌ 无法解析正文: {article_url} | 标题: {final_title}")
         return {
             'title': final_title,
             'url': article_url,
@@ -103,7 +97,6 @@ async def get_article_detail(page_name, title_from_nav, article_url, page_url, s
         }
 
 async def main():
-    # 在异步函数内部创建连接器（此时已有运行中的事件循环）
     connector = aiohttp.TCPConnector(limit_per_host=5, limit=10)
     async with aiohttp.ClientSession(connector=connector) as session:
         print(f"🚀 自动化抓取启动 | 目标日期: {DATE}")
@@ -120,21 +113,10 @@ async def main():
             print("🛑 错误: 首页解析失败，未找到 'listdaohang' 标签。")
             return
 
-        # 获取所有版面 h4 标签
+        tasks = []
         h4_tags = nav_div.find_all('h4')
         print(f"📊 首页解析成功，发现 {len(h4_tags)} 个版面。")
 
-        # ---- 关键修改：按版面号升序排序（01版在前，04版在后） ----
-        def get_page_order(h4):
-            text = h4.get_text(strip=True)
-            match = re.match(r'(\d+)', text)
-            if match:
-                return int(match.group(1))
-            return 999
-        h4_tags = sorted(h4_tags, key=get_page_order)
-
-        # 按原始顺序收集任务（此时已按版面升序）
-        tasks = []
         for h4 in h4_tags:
             page_name = h4.get_text(strip=True)
             ul_tag = h4.find_next_sibling('ul')
@@ -147,16 +129,18 @@ async def main():
                         get_article_detail(page_name, nav_title, url, BASE_INDEX, session)
                     )
 
+        # 关键：反转顺序，使正序（01版在前）
+        tasks.reverse()
+
         total_links = len(tasks)
         print(f"📦 总文章链接数: {total_links} 条。开始抓取（保留顺序，失败也会生成占位条目）...")
 
-        # 控制并发，保持顺序
         semaphore = asyncio.Semaphore(5)
 
         async def limited_task(task):
             async with semaphore:
                 result = await task
-                await asyncio.sleep(0.5)  # 请求间隔
+                await asyncio.sleep(0.5)
                 return result
 
         results = await asyncio.gather(*[limited_task(task) for task in tasks])
@@ -167,7 +151,6 @@ async def main():
         if fail_count > 0:
             print("失败链接已在上方日志中标记（❌ 或 ⚠️）。")
 
-        # 生成 RSS（包含所有条目，顺序按版面升序）
         fg = FeedGenerator()
         fg.title(f'新华每日电讯 - {DATE}')
         fg.link(href=BASE_INDEX, rel='alternate')
@@ -182,7 +165,7 @@ async def main():
             fe.content(art['content_html'], type='html')
 
         fg.rss_file('rss_mrdx.xml', pretty=True)
-        print(f"✨ RSS 文件已生成: rss_mrdx.xml （共 {len(results)} 条，按版面01→04顺序排列）")
+        print(f"✨ RSS 文件已生成: rss_mrdx.xml （共 {len(results)} 条，按01→04顺序排列）")
 
 if __name__ == '__main__':
     if os.name == 'nt':
